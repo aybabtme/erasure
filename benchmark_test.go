@@ -35,7 +35,7 @@ func benchDecode(b *testing.B, n int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.SetBytes(int64(n))
-		_, err := Decode(blockA, blockB, blockC)
+		_, _, err := Decode(blockA, blockB, blockC)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -58,7 +58,7 @@ func benchDecodeRepairData(b *testing.B, n int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.SetBytes(int64(n))
-		_, err := Decode(blockA, blockB, blockC)
+		_, _, err := Decode(blockA, blockB, blockC)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -81,7 +81,7 @@ func benchDecodeRepairXOR(b *testing.B, n int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.SetBytes(int64(n))
-		_, err := Decode(blockA, blockB, blockC)
+		_, _, err := Decode(blockA, blockB, blockC)
 		if err != nil {
 			b.Fatal(err)
 		}

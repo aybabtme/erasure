@@ -1,4 +1,18 @@
-// Package erasure provides algorithms to
+// Package erasure provide can encode a payload into 3 sub packets, where
+// any 2 of the 3 packets are sufficient to reproduce the original payload.
+//
+// This is useful when you want to augment durability of data without
+// having to completely duplicate the payload.
+//
+// For instance, assume you want to persist a 1GB file to storage, with
+// the ability to recover the file if a copy is corrupted.  You could use
+// this package to break your 1GB file into three ~500MB blocks. You
+// would then be using only 1.5GB of storage, and be able to recreate
+// your original payload using any two 500mb packets.
+//
+// The erasure is encoded by xor'ing the two half of the data and
+// appending a checksum to the payload, so that errors can be detected
+// and recovered automatically.
 package erasure
 
 import (
@@ -57,18 +71,34 @@ func Encode(data []byte) (block1, block2, block3 []byte, err error) {
 
 // Decode the original data from the 3 packets it was encoded with. The blocks
 // can come in any order.
-func Decode(block1, block2, block3 []byte) ([]byte, error) {
+//
+// The current implementation does not repair blocks that are detected
+// broken. If a block was broken, it will be returned along with the payload.
+// A user can Encode again the payload to repair the broken block and
+// refresh it.
+func Decode(block1, block2, block3 []byte) (result, broken []byte, err error) {
 
-	// TODO(antoine): repair broken blocks so they can be refreshed
+	// TODO(antoine): repair broken blocks so they can be refreshed.
+	// right now the proper answer is given, but the encoded block
+	// is not repaired, only the data necessary to make the payload is
 
 	if len(block1) != len(block2) && len(block2) != len(block3) {
-		return nil, fmt.Errorf("blocks are of different sizes")
+		return nil, nil, fmt.Errorf("blocks are of different sizes")
 	}
 	blocklen := len(block1)
 
 	pos1, len1, good1 := validate(block1)
 	pos2, len2, good2 := validate(block2)
 	pos3, len3, good3 := validate(block3)
+
+	switch {
+	case good1 && good2:
+		broken = block3
+	case good1 && good3:
+		broken = block2
+	case good2 && good3:
+		broken = block1
+	}
 
 	var (
 		blockA, blockB, blockX []byte
@@ -108,23 +138,33 @@ func Decode(block1, block2, block3 []byte) ([]byte, error) {
 
 	// bad cases first
 	if !agood && !bgood {
-		return nil, fmt.Errorf("block A and B are bad, can't reconstruct")
+		return nil, nil, fmt.Errorf("block A and B are bad, can't reconstruct")
 	}
 	if !agood && !xgood {
-		return nil, fmt.Errorf("block A and X are bad, can't reconstruct")
+		return nil, nil, fmt.Errorf("block A and X are bad, can't reconstruct")
 	}
 	if !bgood && !xgood {
-		return nil, fmt.Errorf("block B and X are bad, can't reconstruct")
+		return nil, nil, fmt.Errorf("block B and X are bad, can't reconstruct")
 	}
 
-	if agood && bgood {
+	if agood && bgood && xgood {
 		// don't need to reconstruct
 		a := blockA[9 : 9+alen]
 		b := blockB[9 : 9+blen]
-		return append(a, b...), nil
+		return append(a, b...), nil, nil
+	}
+
+	if agood && bgood && !xgood {
+		// TODO(antoine): repair blockC
+		a := blockA[9 : 9+alen]
+		b := blockB[9 : 9+blen]
+
+		return append(a, b...), broken, nil
 	}
 
 	if bgood && xgood {
+		// TODO(antoine): repair blockA
+
 		// reconstruct A from B and X
 		a := make([]byte, blocklen-4)
 		b := blockB[:blocklen-4]
@@ -133,14 +173,16 @@ func Decode(block1, block2, block3 []byte) ([]byte, error) {
 		xor(a, b, x)
 		// read A's len
 		alen := buint64(a[1:9])
+
 		return append(
 			a[9:9+alen],
 			b[9:9+blen]...,
-		), nil
+		), broken, nil
 	}
 
-	// last case possible, B is broken
+	// TODO(antoine): repair blockB
 
+	// last case possible, B is broken
 	// reconstruct B from A and X
 	b := make([]byte, blocklen-4)
 	a := blockA[:blocklen-4]
@@ -152,7 +194,7 @@ func Decode(block1, block2, block3 []byte) ([]byte, error) {
 	return append(
 		a[9:9+alen],
 		b[9:9+blen]...,
-	), nil
+	), broken, nil
 }
 
 func validate(block []byte) (uint8, uint64, bool) {
