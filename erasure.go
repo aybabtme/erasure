@@ -2,8 +2,14 @@ package erasure
 
 import (
 	"fmt"
-	"hash/crc32"
+	"hash/adler32"
+	"unsafe"
 )
+
+func chcksum(data []byte) uint32 {
+	return adler32.Checksum(data)
+	// return crc32.ChecksumIEEE(data)
+}
 
 // Encode breaks data into 3 packets, needing only 2 of them
 // to reconstruct the original content. The order of the encoded blocks
@@ -30,20 +36,20 @@ func Encode(data []byte) (blockA, blockB, coding []byte, err error) {
 	a[0] = byte(1)                 // write the order
 	uint32b(a[1:5], alen)          // write the length
 	copy(a[5:5+alen], data[:alen]) // write the data from 0 to alen
-	asum := crc32.ChecksumIEEE(a[:blocklen-4])
+	asum := chcksum(a[:blocklen-4])
 	uint32b(a[blocklen-4:], asum) // write the chsksum of alen+a
 
 	b := make([]byte, blocklen)
 	b[0] = byte(2)                 // write the order
 	uint32b(b[1:5], blen)          // write the length
 	copy(b[5:5+blen], data[alen:]) // write the data from alen to blen
-	bsum := crc32.ChecksumIEEE(b[:5+blen])
+	bsum := chcksum(b[:5+blen])
 	uint32b(b[blocklen-4:], bsum) // write the chsksum of blen+b
 
 	x := make([]byte, blocklen)
 	// don't need to write length or order (order == 3 because 1^2)
 	xor(x[:5+blen], a[:5+blen], b[:5+blen]) // xor a with b
-	xsum := crc32.ChecksumIEEE(x[:blocklen-4])
+	xsum := chcksum(x[:blocklen-4])
 	uint32b(x[blocklen-4:], xsum) // write the chsksum of the xlen+xor
 
 	return a, b, x, nil
@@ -154,7 +160,7 @@ func Decode(block1, block2, block3 []byte) ([]byte, error) {
 func validate(block []byte) (uint8, uint32, bool) {
 	l := len(block)
 	expected := buint32(block[l-4 : l])
-	actual := crc32.ChecksumIEEE(block[:l-4])
+	actual := chcksum(block[:l-4])
 	if expected != actual {
 		return 0, 0, false
 	}
@@ -180,8 +186,30 @@ func buint32(b []byte) uint32 {
 func xor(dst, blockA, blockB []byte) {
 	// could be made faster with unrolling
 	// and working on uint64
-	for i, a := range blockA {
-		b := blockB[i]
-		dst[i] = a ^ b
+
+	extra := len(dst) % 8
+	for i, a := range blockA[:extra] {
+		dst[i] = a ^ blockB[i]
+	}
+	dst = dst[extra:]
+	blockA = blockA[extra:]
+	blockB = blockB[extra:]
+
+	fast64bitsXor(dst, blockA, blockB)
+}
+
+func fast64bitsXor(dst, blockA, blockB []byte) {
+	dst64 := *(*[]uint64)(unsafe.Pointer(&dst))
+	blockA64 := *(*[]uint64)(unsafe.Pointer(&blockA))
+	blockB64 := *(*[]uint64)(unsafe.Pointer(&blockB))
+
+	// for i, a := range blockA64 {
+	// 	b := blockB64[i]
+	// 	dst64[i] = a ^ b
+	// }
+
+	n := len(dst) / 8
+	for i := 0; i < n; i++ {
+		dst64[i] = blockA64[i] ^ blockB64[i]
 	}
 }
