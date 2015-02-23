@@ -67,6 +67,91 @@ func TestXOR(t *testing.T) {
 	}
 }
 
+func testEncodeDecode(t *testing.T, data, blockA, blockB, blockX []byte, maxFlipBits int) {
+
+	t.Logf("blockA=%x (%q)", blockA, blockA)
+	t.Logf("blockB=%x (%q)", blockB, blockB)
+	t.Logf("blockX=%x (%q)", blockX, blockX)
+
+	// normal case
+	gotData, err := Decode(blockA, blockB, blockX)
+	if err != nil {
+		t.Fatalf("couldn't decode: %v", err)
+	} else {
+		want, got := string(data), string(gotData)
+		if want != got {
+			t.Logf("want=%x", want)
+			t.Logf(" got=%x", got)
+			t.Errorf("want %q got %q", want, got)
+			return
+		}
+	}
+
+	emptyBlock := make([]byte, len(blockA))
+
+	missingBlock := []struct {
+		A []byte
+		B []byte
+		X []byte
+	}{
+		{A: emptyBlock, B: blockB, X: blockX},
+		{A: blockA, B: emptyBlock, X: blockX},
+		{A: blockA, B: blockB, X: emptyBlock},
+	}
+
+	for _, ett := range missingBlock {
+		gotData, err = Decode(ett.A, ett.B, ett.X)
+		if err != nil {
+			t.Errorf("couldn't decode: %v", err)
+		} else {
+			want, got := string(data), string(gotData)
+			if want != got {
+				t.Logf("want=%x", want)
+				t.Logf(" got=%x", got)
+				t.Errorf("want %q got %q", want, got)
+				return
+			}
+		}
+	}
+
+	nop := func(b []byte) func(int) []byte {
+		return func(int) []byte { return b }
+	}
+	flipper := func(b []byte) func(int) []byte {
+		return func(n int) []byte { return flipbits(b, n) }
+	}
+
+	errorBlock := []struct {
+		A func(int) []byte
+		B func(int) []byte
+		X func(int) []byte
+	}{
+		{A: flipper(blockA), B: nop(blockB), X: nop(blockX)},
+		{A: nop(blockA), B: flipper(blockB), X: nop(blockX)},
+		{A: nop(blockA), B: nop(blockB), X: flipper(blockX)},
+	}
+	for _, ett := range errorBlock {
+		for i := 1; i < maxFlipBits; i++ {
+			blockA := ett.A(i)
+			blockB := ett.B(i)
+			blockX := ett.X(i)
+
+			gotData, err = Decode(blockA, blockB, blockX)
+			if err != nil {
+				t.Errorf("couldn't decode: %v", err)
+			} else {
+				want, got := string(data), string(gotData)
+				if want != got {
+					t.Logf("want=%x", want)
+					t.Logf(" got=%x", got)
+					t.Errorf("want %q got %q", want, got)
+					return
+				}
+			}
+		}
+	}
+}
+
 func TestEncodeDecode(t *testing.T) {
 
 	tests := []struct {
@@ -82,89 +167,18 @@ func TestEncodeDecode(t *testing.T) {
 
 	for _, tt := range tests {
 		data := []byte(tt.Want)
-		blockA, blockB, blockX := Encode(data)
-
-		t.Logf("blockA=%x (%q)", blockA, blockA)
-		t.Logf("blockB=%x (%q)", blockB, blockB)
-		t.Logf("blockX=%x (%q)", blockX, blockX)
-
-		// normal case
-		gotData, err := Decode(blockA, blockB, blockX)
+		blockA, blockB, blockX, err := Encode(data)
 		if err != nil {
-			t.Errorf("couldn't decode: %v", err)
-		} else {
-			want, got := tt.Want, string(gotData)
-			if want != got {
-				t.Logf("want=%x", want)
-				t.Logf(" got=%x", got)
-				t.Errorf("want %q got %q", want, got)
-				return
-			}
+			t.Fatal(err)
 		}
-
-		emptyBlock := make([]byte, len(blockA))
-
-		missingBlock := []struct {
-			A []byte
-			B []byte
-			X []byte
-		}{
-			{A: emptyBlock, B: blockB, X: blockX},
-			{A: blockA, B: emptyBlock, X: blockX},
-			{A: blockA, B: blockB, X: emptyBlock},
-		}
-
-		for _, ett := range missingBlock {
-			gotData, err = Decode(ett.A, ett.B, ett.X)
-			if err != nil {
-				t.Errorf("couldn't decode: %v", err)
-			} else {
-				want, got := tt.Want, string(gotData)
-				if want != got {
-					t.Logf("want=%x", want)
-					t.Logf(" got=%x", got)
-					t.Errorf("want %q got %q", want, got)
-					return
-				}
-			}
-		}
-
-		nop := func(b []byte) func(int) []byte {
-			return func(int) []byte { return b }
-		}
-		flipper := func(b []byte) func(int) []byte {
-			return func(n int) []byte { return flipbits(b, n) }
-		}
-
-		errorBlock := []struct {
-			A func(int) []byte
-			B func(int) []byte
-			X func(int) []byte
-		}{
-			{A: flipper(blockA), B: nop(blockB), X: nop(blockX)},
-			{A: nop(blockA), B: flipper(blockB), X: nop(blockX)},
-			{A: nop(blockA), B: nop(blockB), X: flipper(blockX)},
-		}
-		for _, ett := range errorBlock {
-			for i := 1; i < 64; i++ {
-				blockA := ett.A(i)
-				blockB := ett.B(i)
-				blockX := ett.X(i)
-
-				gotData, err = Decode(blockA, blockB, blockX)
-				if err != nil {
-					t.Errorf("couldn't decode: %v", err)
-				} else {
-					want, got := tt.Want, string(gotData)
-					if want != got {
-						t.Logf("want=%x", want)
-						t.Logf(" got=%x", got)
-						t.Errorf("want %q got %q", want, got)
-						return
-					}
-				}
-			}
-		}
+		// can decode in any order
+		maxFlipBits := 64
+		testEncodeDecode(t, data, blockA, blockB, blockX, maxFlipBits)
+		testEncodeDecode(t, data, blockA, blockX, blockB, maxFlipBits)
+		testEncodeDecode(t, data, blockB, blockA, blockX, maxFlipBits)
+		testEncodeDecode(t, data, blockB, blockX, blockA, maxFlipBits)
+		testEncodeDecode(t, data, blockX, blockA, blockB, maxFlipBits)
+		testEncodeDecode(t, data, blockX, blockB, blockA, maxFlipBits)
 	}
 }
 
