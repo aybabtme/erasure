@@ -1,4 +1,4 @@
-// Package erasure provide can encode a payload into 3 sub packets, where
+// Package erasure can encode a payload into 3 sub packets, where
 // any 2 of the 3 packets are sufficient to reproduce the original payload.
 //
 // This is useful when you want to augment durability of data without
@@ -10,7 +10,7 @@
 // would then be using only 1.5GB of storage, and be able to recreate
 // your original payload using any two 500mb packets.
 //
-// The erasure is encoded by xor'ing the two half of the data and
+// The playload is encoded by xor'ing the two half of the data and
 // appending a checksum to the payload, so that errors can be detected
 // and recovered automatically.
 package erasure
