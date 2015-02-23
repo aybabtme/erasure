@@ -1,6 +1,7 @@
 package erasure
 
 import (
+	"github.com/dustin/randbo"
 	"math/rand"
 	"testing"
 )
@@ -24,7 +25,6 @@ func TestBinEncoding(t *testing.T) {
 			t.Errorf("want %x got %x", want, got)
 		}
 	}
-
 }
 
 func TestXOR(t *testing.T) {
@@ -67,11 +67,43 @@ func TestXOR(t *testing.T) {
 	}
 }
 
-func testEncodeDecode(t *testing.T, data, blockA, blockB, blockX []byte, maxFlipBits int) {
+func TestCantDecodeBadBlocks(t *testing.T) {
+	block1, block2, block3 := make([]byte, 1), make([]byte, 2), make([]byte, 3)
+	_, err := Decode(block1, block2, block3)
+	if err == nil {
+		t.Errorf("should have gotten an error when decoding blocks of wrong size")
+	}
+}
 
-	t.Logf("blockA=%x (%q)", blockA, blockA)
-	t.Logf("blockB=%x (%q)", blockB, blockB)
-	t.Logf("blockX=%x (%q)", blockX, blockX)
+func TestEncodeDecode(t *testing.T) {
+
+	tests := []string{
+		"hello there",
+		"hello, there",
+	}
+
+	if !testing.Short() {
+		tests = append(tests, string(nBytes(1<<10)))
+	}
+
+	for _, tt := range tests {
+		data := []byte(tt)
+		blockA, blockB, blockX, err := Encode(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// can decode in any order
+		maxFlipBits := len(data) * 4
+		testEncodeDecode(t, data, blockA, blockB, blockX, maxFlipBits)
+		testEncodeDecode(t, data, blockA, blockX, blockB, maxFlipBits)
+		testEncodeDecode(t, data, blockB, blockA, blockX, maxFlipBits)
+		testEncodeDecode(t, data, blockB, blockX, blockA, maxFlipBits)
+		testEncodeDecode(t, data, blockX, blockA, blockB, maxFlipBits)
+		testEncodeDecode(t, data, blockX, blockB, blockA, maxFlipBits)
+	}
+}
+
+func testEncodeDecode(t *testing.T, data, blockA, blockB, blockX []byte, maxFlipBits int) {
 
 	// normal case
 	gotData, err := Decode(blockA, blockB, blockX)
@@ -121,6 +153,7 @@ func testEncodeDecode(t *testing.T, data, blockA, blockB, blockX []byte, maxFlip
 		return func(n int) []byte { return flipbits(b, n) }
 	}
 
+	// should recover if 1 block is broken
 	errorBlock := []struct {
 		A func(int) []byte
 		B func(int) []byte
@@ -150,35 +183,34 @@ func testEncodeDecode(t *testing.T, data, blockA, blockB, blockX []byte, maxFlip
 			}
 		}
 	}
-}
 
-func TestEncodeDecode(t *testing.T) {
-
-	tests := []struct {
-		Want string
+	// should error if 2 block are broken
+	tooManyErrors := []struct {
+		A   func(int) []byte
+		B   func(int) []byte
+		X   func(int) []byte
+		Err error
 	}{
-		{
-			"hello there",
-		},
-		{
-			"hello, there",
-		},
+		{A: flipper(blockA), B: flipper(blockB), X: nop(blockX)},
+		{A: nop(blockA), B: flipper(blockB), X: flipper(blockX)},
+		{A: flipper(blockA), B: nop(blockB), X: flipper(blockX)},
 	}
+	for _, ett := range tooManyErrors {
+		for i := 1; i < maxFlipBits; i++ {
+			blockA := ett.A(i)
+			blockB := ett.B(i)
+			blockX := ett.X(i)
 
-	for _, tt := range tests {
-		data := []byte(tt.Want)
-		blockA, blockB, blockX, err := Encode(data)
-		if err != nil {
-			t.Fatal(err)
+			gotData, err = Decode(blockA, blockB, blockX)
+			if err == nil {
+				t.Errorf("should have had an error", err)
+			}
+			if want, got := string(data), string(gotData); want == got {
+				t.Logf("want=%x", want)
+				t.Logf(" got=%x", got)
+				t.Errorf("should not have reconstructed string")
+			}
 		}
-		// can decode in any order
-		maxFlipBits := 64
-		testEncodeDecode(t, data, blockA, blockB, blockX, maxFlipBits)
-		testEncodeDecode(t, data, blockA, blockX, blockB, maxFlipBits)
-		testEncodeDecode(t, data, blockB, blockA, blockX, maxFlipBits)
-		testEncodeDecode(t, data, blockB, blockX, blockA, maxFlipBits)
-		testEncodeDecode(t, data, blockX, blockA, blockB, maxFlipBits)
-		testEncodeDecode(t, data, blockX, blockB, blockA, maxFlipBits)
 	}
 }
 
@@ -194,4 +226,13 @@ func flipbits(b []byte, n int) []byte {
 	}
 
 	return cp
+}
+
+func nBytes(n int) []byte {
+	p := make([]byte, n)
+	_, err := randbo.New().Read(p)
+	if err != nil {
+		panic(err)
+	}
+	return p
 }

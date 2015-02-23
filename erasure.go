@@ -1,3 +1,4 @@
+// Package erasure provides algorithms to
 package erasure
 
 import (
@@ -8,47 +9,46 @@ import (
 
 func chcksum(data []byte) uint32 {
 	return adler32.Checksum(data)
-	// return crc32.ChecksumIEEE(data)
 }
 
 // Encode breaks data into 3 packets, needing only 2 of them
-// to reconstruct the original content. The order of the encoded blocks
-// doesn't matter and can be decoded in any order.
-func Encode(data []byte) (blockA, blockB, coding []byte, err error) {
+// to reconstruct the original content. The packets can be decoded
+// in any order.
+func Encode(data []byte) (block1, block2, block3 []byte, err error) {
 
-	alen := uint32(len(data) / 2)
+	alen := uint64(len(data) / 2)
 
 	blen := alen
 	blocklen := alen
 	if (len(data)/2)%2 != 0 {
 		blen++
 	}
-	// 1 byte for order, 4 bytes for alen/blen, 4 bytes for crc32
-	blocklen = blen + (1 + 4 + 4)
+	// 1 byte for order, 8 bytes for alen/blen, 4 bytes for crc32
+	blocklen = blen + (1 + 8 + 4)
 
 	// A block looks like...
 	// 1            : the order of the block
-	// 1 to 5       : the length of the block
-	// 5 to len     : the data of the block
-	// 5+len to end : the checksum of the len+data
+	// 1 to 9       : the length of the block
+	// 9 to len     : the data of the block
+	// 9+len to end : the checksum of the len+data
 
 	a := make([]byte, blocklen)
 	a[0] = byte(1)                 // write the order
-	uint32b(a[1:5], alen)          // write the length
-	copy(a[5:5+alen], data[:alen]) // write the data from 0 to alen
+	uint64b(a[1:9], alen)          // write the length
+	copy(a[9:9+alen], data[:alen]) // write the data from 0 to alen
 	asum := chcksum(a[:blocklen-4])
 	uint32b(a[blocklen-4:], asum) // write the chsksum of alen+a
 
 	b := make([]byte, blocklen)
 	b[0] = byte(2)                 // write the order
-	uint32b(b[1:5], blen)          // write the length
-	copy(b[5:5+blen], data[alen:]) // write the data from alen to blen
-	bsum := chcksum(b[:5+blen])
+	uint64b(b[1:9], blen)          // write the length
+	copy(b[9:9+blen], data[alen:]) // write the data from alen to blen
+	bsum := chcksum(b[:9+blen])
 	uint32b(b[blocklen-4:], bsum) // write the chsksum of blen+b
 
 	x := make([]byte, blocklen)
 	// don't need to write length or order (order == 3 because 1^2)
-	xor(x[:5+blen], a[:5+blen], b[:5+blen]) // xor a with b
+	xor(x[:9+blen], a[:9+blen], b[:9+blen]) // xor a with b
 	xsum := chcksum(x[:blocklen-4])
 	uint32b(x[blocklen-4:], xsum) // write the chsksum of the xlen+xor
 
@@ -57,9 +57,9 @@ func Encode(data []byte) (blockA, blockB, coding []byte, err error) {
 
 // Decode the original data from the 3 packets it was encoded with. The blocks
 // can come in any order.
-//
-// TODO(antoine): repair broken blocks so they can be refreshed
 func Decode(block1, block2, block3 []byte) ([]byte, error) {
+
+	// TODO(antoine): repair broken blocks so they can be refreshed
 
 	if len(block1) != len(block2) && len(block2) != len(block3) {
 		return nil, fmt.Errorf("blocks are of different sizes")
@@ -73,7 +73,7 @@ func Decode(block1, block2, block3 []byte) ([]byte, error) {
 	var (
 		blockA, blockB, blockX []byte
 		agood, bgood, xgood    bool
-		alen, blen             uint32
+		alen, blen             uint64
 	)
 
 	switch pos1 {
@@ -119,8 +119,8 @@ func Decode(block1, block2, block3 []byte) ([]byte, error) {
 
 	if agood && bgood {
 		// don't need to reconstruct
-		a := blockA[5 : 5+alen]
-		b := blockB[5 : 5+blen]
+		a := blockA[9 : 9+alen]
+		b := blockB[9 : 9+blen]
 		return append(a, b...), nil
 	}
 
@@ -132,39 +132,37 @@ func Decode(block1, block2, block3 []byte) ([]byte, error) {
 
 		xor(a, b, x)
 		// read A's len
-		alen := buint32(a[1:5])
+		alen := buint64(a[1:9])
 		return append(
-			a[5:5+alen],
-			b[5:5+blen]...,
+			a[9:9+alen],
+			b[9:9+blen]...,
 		), nil
 	}
 
-	if agood && xgood {
-		// reconstruct B from A and X
-		b := make([]byte, blocklen-4)
-		a := blockA[:blocklen-4]
-		x := blockX[:blocklen-4]
+	// last case possible, B is broken
 
-		xor(b, a, x)
-		// read B's len
-		blen = buint32(b[1:5])
-		return append(
-			a[5:5+alen],
-			b[5:5+blen]...,
-		), nil
-	}
+	// reconstruct B from A and X
+	b := make([]byte, blocklen-4)
+	a := blockA[:blocklen-4]
+	x := blockX[:blocklen-4]
 
-	panic("unreachable")
+	xor(b, a, x)
+	// read B's len
+	blen = buint64(b[1:9])
+	return append(
+		a[9:9+alen],
+		b[9:9+blen]...,
+	), nil
 }
 
-func validate(block []byte) (uint8, uint32, bool) {
+func validate(block []byte) (uint8, uint64, bool) {
 	l := len(block)
 	expected := buint32(block[l-4 : l])
 	actual := chcksum(block[:l-4])
 	if expected != actual {
 		return 0, 0, false
 	}
-	return block[0], buint32(block[1:5]), true
+	return block[0], buint64(block[1:9]), true
 }
 
 func uint32b(dst []byte, u uint32) {
@@ -180,6 +178,30 @@ func buint32(b []byte) uint32 {
 	u |= (uint32(b[2]) << 8)
 	u |= (uint32(b[1]) << 16)
 	u |= (uint32(b[0]) << 24)
+	return u
+}
+
+func uint64b(dst []byte, u uint64) {
+	dst[7] = byte((u & 0x00000000000000FF) >> 0)
+	dst[6] = byte((u & 0x000000000000FF00) >> 8)
+	dst[5] = byte((u & 0x0000000000FF0000) >> 16)
+	dst[4] = byte((u & 0x00000000FF000000) >> 24)
+	dst[3] = byte((u & 0x000000FF00000000) >> 32)
+	dst[2] = byte((u & 0x0000FF0000000000) >> 40)
+	dst[1] = byte((u & 0x00FF000000000000) >> 48)
+	dst[0] = byte((u & 0xFF00000000000000) >> 56)
+}
+
+func buint64(b []byte) uint64 {
+	var u uint64
+	u |= (uint64(b[7]) << 0)
+	u |= (uint64(b[6]) << 8)
+	u |= (uint64(b[5]) << 16)
+	u |= (uint64(b[4]) << 24)
+	u |= (uint64(b[3]) << 32)
+	u |= (uint64(b[2]) << 40)
+	u |= (uint64(b[1]) << 48)
+	u |= (uint64(b[0]) << 56)
 	return u
 }
 
@@ -202,11 +224,6 @@ func fast64bitsXor(dst, blockA, blockB []byte) {
 	dst64 := *(*[]uint64)(unsafe.Pointer(&dst))
 	blockA64 := *(*[]uint64)(unsafe.Pointer(&blockA))
 	blockB64 := *(*[]uint64)(unsafe.Pointer(&blockB))
-
-	// for i, a := range blockA64 {
-	// 	b := blockB64[i]
-	// 	dst64[i] = a ^ b
-	// }
 
 	n := len(dst) / 8
 	for i := 0; i < n; i++ {
